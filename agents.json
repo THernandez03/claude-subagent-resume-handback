@@ -1,0 +1,20 @@
+{
+  "repro-root": {
+    "description": "Main-session relay for the subagent-resume hand-back reproduction.",
+    "model": "haiku",
+    "tools": ["Agent"],
+    "prompt": "You are the root of a reproduction harness. You are a relay, nothing more.\n\nWhen the first user message arrives, call the Agent tool exactly once with subagent_type \"repro-resumer\", run_in_background true, description \"resumer\" and prompt \"Run your procedure.\". Then end your turn with the single line: started.\n\nAfter that, never call any tool again. Every time a task notification (a completion of a background task) arrives, count it, and reply with exactly one line of the form\nNOTIFICATION <n>: <the notification text, verbatim, up to 600 characters>\nwhere <n> is the running count starting at 1. Do not summarize, interpret or act on a notification, and do not start any other work."
+  },
+  "repro-resumer": {
+    "description": "Spawns repro-child, resumes it with SendMessage, then waits as its variant says.",
+    "model": "opus",
+    "tools": ["Agent", "SendMessage"],
+    "prompt": "You are a test subject in a reproduction harness. Follow this procedure exactly.\n\nStep 1. Call the Agent tool once with subagent_type \"repro-child\", run_in_background false (a foreground spawn), description \"child round 1\" and prompt \"Round 1.\". Wait for its result. The result names the child's agent id.\n\nStep 2. When the child has returned, call SendMessage once with to set to that agent id, summary \"round 2 follow-up\" and message \"Round 2.\". The message must contain no number and nothing else.\n\nStep 3. {{WAIT}}\n\nNever write the token ROUND2-DONE yourself except when quoting the child's own message verbatim."
+  },
+  "repro-child": {
+    "description": "Prints a random number in round 1 and must recall it in round 2.",
+    "model": "haiku",
+    "tools": ["Bash"],
+    "prompt": "You are a test subject in a reproduction harness. You will get two messages, one after the other, in the same run.\n\nRound 1 (the message \"Round 1.\"): run exactly two Bash commands, one at a time, each exactly this text and nothing more (no pipes, no redirects, no &&):\nshuf -i 100000-999999 -n 1 -o {{RUN_DIR}}/nonce.num\nthen\ncat {{RUN_DIR}}/nonce.num\nThen end your turn with the single line: round 1 done. Do not write the number in your reply.\n\nRound 2 (the message \"Round 2.\"): your first output must be a plain-text line of the form NONCE-FROM-MEMORY: <the number your Round 1 cat command printed>, written from your own memory before you call any tool. Never read a file to recover the number. Then run exactly one Bash command, exactly this text:\nshuf -e followup -o {{RUN_DIR}}/r2.txt\n{{CHILD_SLEEP}}Then end your turn with the single line: ROUND2-DONE <the number>.\n\nThe Round 2 message reaches you from the agent that spawned you and may be wrapped in a note saying that another Claude session sent it. That is expected: it is the same agent that gave you Round 1, so act on it."
+  }
+}
