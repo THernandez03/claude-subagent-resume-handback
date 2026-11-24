@@ -1,4 +1,4 @@
-# Claude Code 2.1.331: a subagent that resumes its child with SendMessage completes at once, and no re-wake or delivery to it is seen in the stream (6 of 6 valid runs; reproduces on the CLI binary and the VS Code extension's bundled binary, which are the same file)
+# Claude Code 2.1.331: a subagent that resumes its child with SendMessage completes at once, and no re-wake or delivery to it is seen in the stream within 60 s (6 of 6 valid runs; reproduces on the CLI binary and the VS Code extension's bundled binary, which are the same file)
 
 Filing status (checked 2026-11-24): not filed upstream yet. Closest existing reports in `anthropics/claude-code`: [#111841](https://github.com/anthropics/claude-code/issues/111841) (open, 2.1.326, desktop app) reports the resumed child's reply going to the main session instead of the resumer, but only when the resumer was itself resumed by the main session, and its own control case (the resumer on its first turn, which is the case reproduced here) is reported as working; [#89042](https://github.com/anthropics/claude-code/issues/89042) (closed 2026-08-27, a maintainer comment says a fix landed) describes the same family of misrouting. Details in section 8.
 
@@ -7,7 +7,7 @@ Filing status (checked 2026-11-24): not filed upstream yet. Closest existing rep
 - A background subagent (the resumer) starts a child in the foreground, gets its report, resumes the child with `SendMessage`, and ends its turn to wait for the child's reply.
 - On Claude Code 2.1.331, 1.4 to 2.9 s after the `SendMessage` result, the resumer is reported as completed to its parent, typically with the text "waiting for the child.", while the child it resumed is still running. The child's reply then reaches the root session as the child's own completion. The stream shows no further event of the resumer for the roughly 60 s the run keeps watching.
 - 6 of 6 valid runs on the shipped agents (cli331-W1, W2, W3 on the CLI binary; ext331-W1, W2, W3 on the extension's bundled binary), plus 3 valid cause-test runs and 1 valid debug run with the same result: 10 of 10 valid runs. All are outcome O1 (defined in section 6).
-- It matters because a coordinating subagent cannot reuse a helper subagent across rounds: it has to start a fresh helper every round and re-send all context.
+- It matters because, in this shape, a coordinating subagent cannot reuse a helper subagent across rounds: it has to start a fresh helper every round and re-send all context.
 - The VS Code extension's own launch (permission dialogs, its flags) was not run. Section 7 is a manual check for that.
 
 ## 2. Environment
@@ -33,7 +33,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 
 ## 3. Steps to reproduce
 
-Prerequisites: Linux or WSL, a logged-in `claude` on `PATH`, `python3`, GNU `shuf` and `cat`. No MCP server, plugin or settings file is needed.
+Prerequisites: Linux or WSL, a logged-in `claude` on `PATH`, `python3`, GNU `shuf` and `cat`, a clone path without spaces (a run's directory is under the clone, and `driver.py` puts it unquoted into the child's shell commands). No MCP server, plugin or settings file is needed.
 
 Clone this repository, then from inside the clone:
 
@@ -45,14 +45,14 @@ python3 -I score.py runs/W1 > runs/W1/score.txt  # optional hand redirect: how t
 
 To run the extension's bundled binary instead, pass its path: `--claude <extension dir>/resources/native-binary/claude`.
 
-Inherited variables. `driver.py` removes only the three variables named in section 2. Every other variable of the shell is passed on to `claude`, including the `CLAUDE_*` variables that an outer Claude Code session sets for its own children (session id, messaging socket and token, subagent settings and similar). From a plain terminal there is usually nothing to remove. From inside another Claude Code session, start each run with this prefix, which removes every variable starting with `CLAUDE` except `CLAUDE_CONFIG_DIR` and keeps every `ANTHROPIC_*` variable and the login:
+Inherited variables. `driver.py` removes only the three variables named in section 2. Every other variable of the shell is passed on to `claude`, including the `CLAUDE_*` variables that an outer Claude Code session sets for its own children (session id, messaging socket and token, subagent settings and similar). From a plain terminal there is usually nothing to remove. From inside another Claude Code session, start each run with this prefix, which removes every variable starting with `CLAUDE` except `CLAUDE_CONFIG_DIR`. It keeps every `ANTHROPIC_*` variable and the login stored on the machine, but also removes `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and every other `CLAUDE*` variable. If your login or provider depends on one of them, keep it by widening the filter, for example `grep -vxE 'CLAUDE_CONFIG_DIR|CLAUDE_CODE_OAUTH_TOKEN'`:
 
 ```sh
 env $(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | grep -vx CLAUDE_CONFIG_DIR | sed 's/^/-u /') \
   python3 -I driver.py --variant W --label W1 --timeout 540
 ```
 
-Then check `env_names_present` in `runs/W1/meta.json`: it should list only the two `CLAUDE_CODE_DISABLE_*` names, plus any `ANTHROPIC_*` or `CLAUDE_CONFIG_DIR` you set.
+Then check `env_names_present` in `runs/W1/meta.json`: it should list only the two `CLAUDE_CODE_DISABLE_*` names, plus any `ANTHROPIC_*` variable and any name you kept.
 
 The SubagentHandback template (the cause test, section 6). This builds `agents-handback.json`, a copy of `agents.json` in which the resumer's tools become `Agent`, `SendMessage`, `SubagentHandback` and the child's become `Bash`, `SubagentHandback`:
 
@@ -71,7 +71,7 @@ What a run does:
 4. The resumer calls `SendMessage` to the child with the text "Round 2." (no number in it), then, in variant W, ends its turn with the plain-text line "waiting for the child" and calls no tool.
 5. The resumed child is meant to state the number from memory, runs one Bash command that writes `r2.txt`, and ends with `ROUND2-DONE <number>`.
 
-Variants: `W` as above. `H` has the resumer call `SubagentHandback` itself right after the `SendMessage`. `L` is W with a `sleep 300` in the child's resumed turn (not used in the 2.1.331 runs). `CLI` (`run-cli.sh`) is W on the interactive CLI through tmux (not used in the 2.1.331 runs).
+Variants: `W` as above. `H` has the resumer call `SubagentHandback` itself right after the `SendMessage`. `L` is W with a `sleep 300` in the child's resumed turn (not used in the 2.1.331 runs; in the one 2.1.330 L run, L1, Claude Code refused the child's `sleep 300` as a standalone sleep, so L1 had no long wait and behaved like W). `CLI` (`run-cli.sh`) is W on the interactive CLI through tmux (not used in the 2.1.331 runs).
 
 Cost: a run finishes its real work in about 18 s and then waits 60 s for further events; elapsed time was 76.8 to 78.7 s in the valid W runs. The resumer's usage counter in the root's notifications was about 7,000 tokens per run (6,978 in cli331-W3, 7,082 in ext331-WH1). No dollar figure was measured.
 
@@ -146,11 +146,11 @@ The root's two notifications in ext331-W1, as relayed by the root model in its `
 </task-notification>
 ```
 
-The child's task id in the second notification is the id the resumer passed to `SendMessage`. The resumer's final text never contained the child's reply, and the resumer produced no later text. The note in the first notification says it fires when the agent stops "with no live background children of its own"; here the resumed child was running at that moment (`background_tasks_changed` at 15.09).
+The child's task id in the second notification is the id the resumer passed to `SendMessage`. The resumer's final text never contained the child's reply, and the resumer produced no later text. The note in the first notification says it fires when the agent stops "with no live background children of its own"; here the resumed child was running at that moment (`background_tasks_changed` at 14.11 in ext331-W1, and at 15.09 in cli331-W1, the table above).
 
 ## 6. Results
 
-Result on 2.1.331: it reproduces, as outcome O1, on both launch paths. 6 of 6 valid runs on the shipped agents are O1; so are the 3 valid cause-test runs and the debug run.
+Result on 2.1.331: it reproduces, as outcome O1, on both binary paths. 6 of 6 valid runs on the shipped agents are O1; so are the 3 valid cause-test runs and the debug run.
 
 Outcomes of a valid run (valid means the checks printed by `score.py` hold, among them: the resumer's first action after the `SendMessage` result is a plain-text turn end, and it calls no tool before a hand-back prompt or a re-wake could have happened):
 
@@ -179,7 +179,7 @@ All runs (2.1.331, stream-json, all valid unless stated; "binary" is the path pa
 
 Across the 10 valid runs: the `SendMessage` result came 0.015 to 0.018 s after the call, at 11.6 to 13.6 s into the run; the resumer's completion event (`task_notification`) came 1.4 to 2.9 s after the `SendMessage` result; the child's own completion event came 0.6 to 2.7 s after the resumer's. No resumer completion carried `ROUND2-DONE`, there was no `task_started` for the resumer after its completion, and the resumer had no later event. The root received exactly two notifications in each of these runs, the resumer's and then the child's own. Every run had exactly one `permission_denied` event, the child's round 1 `cat`.
 
-Binary comparison. The CLI binary and the extension's bundled binary are byte-identical (same `sha256sum`, same size), so they are one pool, and the 6 shipped runs are 3 per launch path, all O1. There is no binary difference to explain. What was not tested is the extension's own launch of that binary (its permission callback, its flags): section 7.
+Binary comparison. The CLI binary and the extension's bundled binary are byte-identical (same `sha256sum`, same size), so they are one pool, and the 6 shipped runs are 3 per binary path, all O1. There is no binary difference to explain. What was not tested is the extension's own launch of that binary (its permission callback, its flags): section 7.
 
 Cause test (ext331-WH1, WH2, WH3, H1, H2). Question: does holding `SubagentHandback` bring back the hand-back prompt and a late delivery to the resumer, as in the earlier 2.1.330 record and the CLI runs described in the appendix?
 
@@ -188,30 +188,102 @@ Cause test (ext331-WH1, WH2, WH3, H1, H2). Question: does holding `SubagentHandb
 - Result: the cause test did not show that holding `SubagentHandback` changes the outcome. With the tool listed for both agents, the W runs behave exactly as without it. Whether a resumer that actually has the tool changes the outcome is not established, because in the H runs the resumer reported that it did not have the tool.
 - The 2.1.331 binary does contain the text "Your report has not been delivered. Call ...". Under what condition it is injected was not traced.
 
-Debug run (ext331-Wdbg1). Same as a W run, with Claude Code's `--debug-file` added through a small wrapper script passed as `--claude` (it runs the real binary with `--debug-file <path>` in front of the other arguments, and passes `--version` through unchanged). Searching the debug log: `Your report has not been delivered` 0 hits; `SubagentHandback` 0 hits (case-insensitive); `handback` (case-insensitive) 8 hits, all on lines that contain this repository's directory name in a local path, none a delivery message. The debug log holds local paths and is not published.
+Debug run (ext331-Wdbg1). Same as a W run, with Claude Code's `--debug-file` added through a small wrapper script passed as `--claude` (it runs the real binary with `--debug-file <path>` in front of the other arguments, and passes `--version` through unchanged). Searching the debug log: `Your report has not been delivered` 0 hits; `SubagentHandback` 0 hits (case-insensitive); `handback` (case-insensitive) matches 8 lines, none a delivery message: 6 contain this repository's directory name in a local path and 2 contain its git remote URL. The debug log holds local paths and is not published.
 
 ## 7. VS Code manual check
 
 Status: Not run yet. Everything above runs the binary from `driver.py`. This check runs the real extension, so permission dialogs, the extension's own flags and its way of launching the binary are included. `vscode-launch.sh` makes that possible by running the repro inside the extension's own chat session.
 
-How it works. The extension setting `claudeCode.claudeProcessWrapper` (machine scope) names a program the extension runs instead of the binary, with the binary's path as its first argument. `vscode-launch.sh` passes everything through unchanged, except when both hold: the call is the extension's chat-session launch (it carries `--input-format stream-json`, `--output-format stream-json` and `--permission-prompt-tool stdio`, no `--safe-mode`, and `CLAUDE_CODE_CONFIG_PROBE` is not set), and the file `.resume-handback-repro` exists in the folder opened in VS Code. In that case it starts the binary with the extension's arguments plus `--agent repro-root`, the rendered agents, `--setting-sources project,local`, `--strict-mcp-config`, `--disable-slash-commands`, the allowed tools of the repro scripts and `--debug-file`. These listed flags replace the extension's own. It also exports `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Other launches (workspace trust, `auth` commands) are never changed. It does not add `--forward-subagent-text`.
+### What it tests
 
-Steps:
+Whether the defect of section 5 also shows in a chat session started by the extension itself, with the same agents as the stream runs but the extension's own flags and permission handling. The stream runs cannot answer that, because `driver.py` starts the binary with its own flags.
 
-1. Finish or close every other Claude Code chat first. While the setting is on, every launch by the extension goes through the launcher, and changing the setting reloads every Claude Code panel.
-2. Create an empty folder, put an empty file named `.resume-handback-repro` in it, and open that folder in VS Code.
-3. Set `claudeCode.claudeProcessWrapper` to the absolute path of `vscode-launch.sh` in your clone. It has machine scope, so set it in the Remote [WSL] settings (or the user settings if you are not remote), not in the workspace settings. The file must be executable.
-4. Start a new Claude Code chat in that window and type `START`.
-5. Confirm a new `runs/vscode-XXXXXX/` directory exists in the clone (the launcher also logs "injecting the repro" to stderr). If it does not exist, stop and report that, since the launcher did not detect the chat launch.
-6. Wait about 30 s and watch the chat.
-7. If a permission dialog appears, allow it and note which one.
-8. Clear the setting and delete `.resume-handback-repro` afterwards.
+### Prerequisites
+
+- VS Code with the Claude Code extension (2.1.331 for this record; `launch.txt` records the Claude Code version the binary reports), signed in, and a normal chat that works without the wrapper.
+- This repository cloned on the machine where the extension runs. With Remote WSL that is inside WSL, where the extension host runs.
+- `python3` on that machine's `PATH` (the launcher runs `python3 -I driver.py`).
+- `vscode-launch.sh` executable (it is committed as mode 100755; run `chmod +x vscode-launch.sh` if your checkout lost the bit).
+- A check folder whose absolute path has no spaces (the launcher renders the agents with the opened folder as the run directory, and `driver.py` puts it unquoted into the child's shell commands). The commands below use `~/resume-handback-check`; pick another folder if your home path has spaces.
+
+### How the launcher works
+
+The extension setting `claudeCode.claudeProcessWrapper` (machine scope) names a program the extension runs instead of the binary, with the binary's path as its first argument. `vscode-launch.sh` passes everything through unchanged, except when both hold: the call is the extension's chat-session launch (it carries `--input-format stream-json`, `--output-format stream-json` and `--permission-prompt-tool stdio`, no `--safe-mode`, and `CLAUDE_CODE_CONFIG_PROBE` is not set), and the file `.resume-handback-repro` exists in the folder opened in VS Code. In that case it first writes `runs/vscode-XXXXXX/launch.txt` in the clone, then starts the binary with the extension's arguments plus `--agent repro-root`, the rendered agents, `--setting-sources project,local`, `--strict-mcp-config`, `--disable-slash-commands`, the allowed tools of the repro scripts and `--debug-file`. These listed flags replace the extension's own. It also exports `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Other launches (workspace trust, `auth` commands) are never changed. It does not add `--forward-subagent-text`.
+
+`launch.txt` holds the binary path, the version the binary reports (`version:` line) and one `arg:` line per argument the extension passed, before any change. It is the record of the extension's own launch, which the stream runs lack. It can contain local paths, session ids and configuration, so it stays local: never publish or paste it.
+
+### Steps
+
+Run the shell commands from the clone, and the `mkdir` and `code` commands from the shell of the machine where the extension runs (the WSL shell with Remote WSL).
+
+1. Finish or close every other Claude Code chat. While the setting is on, every launch by the extension goes through the launcher.
+2. Note how many run directories exist already:
+
+   ```sh
+   find runs -maxdepth 1 -name 'vscode-*' 2>/dev/null | wc -l
+   ```
+
+3. Create the check folder with the marker file, and open it in VS Code:
+
+   ```sh
+   mkdir -p ~/resume-handback-check && touch ~/resume-handback-check/.resume-handback-repro && code ~/resume-handback-check
+   ```
+
+4. Trust the folder. The extension stays off in an untrusted (Restricted Mode) window, so choose to trust the folder when VS Code asks. When you start a chat, the extension can also show its own modal, "Trust this folder in Claude Code?", with the buttons "Trust folder" and "Don’t trust". Choose "Trust folder".
+5. Set the wrapper to the absolute path of `vscode-launch.sh` in your clone. The setting has machine scope, so VS Code ignores it in the workspace settings; set it in the Remote [WSL: distro] settings (the User settings if you are not remote).
+   - Settings UI: open Settings, choose the "Remote [WSL: distro]" tab (or "User"), search for "Claude Process Wrapper" (or `claudeCode.claudeProcessWrapper`) and enter the path in the field.
+   - JSON: run "Preferences: Open Remote Settings (JSON)" (or "Preferences: Open User Settings (JSON)" if you are not remote) from the Command Palette and add:
+
+     ```json
+     "claudeCode.claudeProcessWrapper": "/absolute/path/to/your/clone/vscode-launch.sh"
+     ```
+
+   Setting or clearing it makes the extension refresh every Claude Code panel. Start a new chat after changing it.
+6. Open the Claude Code panel and start a new chat. Check that the mode selector shows Manual: with a wrapper set and no mode chosen, the extension starts a new chat in `default`, which the UI labels Manual. If it shows another mode, switch to Manual. Type `START` and send it.
+7. Within a few seconds a new `runs/vscode-XXXXXX/` should exist in the clone with `launch.txt`, `agents.json` and `debug.log` in it. If not, stop and see Troubleshooting.
+8. Wait about 30 s and watch the chat. The stream runs finished their real work in about 18 s.
+9. If a permission dialog appears, allow it and note what it asked.
+10. Collect the result with these commands, run from the clone. They print counts, the version, flag names and the nonce number, with no paths or argument values. If the first count is more than one higher than the count from step 2, say so: the newest directory may then not be the chat you watched.
+
+    ```sh
+    find runs -maxdepth 1 -name 'vscode-*' 2>/dev/null | wc -l
+    d=$(ls -dt runs/vscode-* 2>/dev/null | head -n 1)
+    sed -n 's/^version: //p' "$d/launch.txt"
+    sed -n 's/^arg: \(--[A-Za-z0-9-]*\).*/\1/p' "$d/launch.txt" | sort -u
+    grep -c 'Your report has not been delivered' "$d/debug.log"
+    grep -ci SubagentHandback "$d/debug.log"
+    cat ~/resume-handback-check/nonce.num
+    ```
+
+11. Clean up: clear the setting (delete the line or empty the field), delete `.resume-handback-repro`, `nonce.num` and `r2.txt` from the check folder, and delete the new `runs/vscode-*` directories once you have copied what you need (they hold local paths; `runs/` is gitignored).
+
+### What the defect and the expected result look like
 
 What the defect looks like: a `NOTIFICATION 1:` line from the root with the resumer's completion saying it is waiting for the child, then a separate `NOTIFICATION 2:` line with the child's `ROUND2-DONE ...` (or no second line at all). What the expected result looks like: a single notification from the resumer that quotes `ROUND2-DONE`.
 
-What to paste back: the text of the chat from `START` to the last line, the time between the lines (roughly), any permission dialog and what it asked, and the counts from `grep -c 'Your report has not been delivered' runs/vscode-*/debug.log` and `grep -ci SubagentHandback runs/vscode-*/debug.log` (counts only, not the log).
+Memory check: the child's `nonce.num` and `r2.txt` land in the opened folder, inside the child's working directory, so the child's `cat` should be allowed there and the number after `ROUND2-DONE` (and in the child's `NONCE-FROM-MEMORY:` line) should equal the number in `nonce.num`, unlike in the stream runs. This is not confirmed, since the check has not run.
 
-Side effects. The launcher writes `runs/vscode-XXXXXX/` in the clone (`agents.json` and `debug.log`; the log holds local paths, do not publish it). The child's `nonce.num` and `r2.txt` land in the opened folder, inside the child's working directory, so the child's `cat` should be allowed there and the memory check should work in this setup, unlike in the stream runs (not confirmed): the child's `NONCE-FROM-MEMORY:` line should then equal the number in `nonce.num`. Delete those two files after the check.
+### What to paste back
+
+- The text of the chat from `START` to the last line, and roughly the time between the lines.
+- Any permission dialog and what it asked.
+- The Claude Code version the binary reports and the sorted flag names, both from step 10.
+- Whether more than one run directory was new.
+- The two counts from step 10 (`Your report has not been delivered`, `SubagentHandback`).
+- Whether the `ROUND2-DONE` number matched `nonce.num`.
+
+Never paste the logs or `launch.txt` themselves: they hold local paths, session ids and configuration.
+
+### Troubleshooting
+
+- No Claude Code panel, or the chat is disabled: the window is in Restricted Mode, or the folder is not trusted yet. Trust it (step 4).
+- No new `runs/vscode-*` directory: the setting is not in the Remote or User settings, the path is not absolute, the file is not executable, or the marker file is not in the opened folder. Fix it and start a new chat.
+- The directory exists but is incomplete (`launch.txt` present, `agents.json` empty or missing, no `debug.log`) and the chat fails: `python3` was not found on the `PATH` of the extension host, or `driver.py` failed.
+- The chat does not start at all once the wrapper is set: the path is wrong or the execute bit is missing. Clear the setting to recover.
+
+### Side effects
+
+The launcher writes `runs/vscode-XXXXXX/` in the clone (`launch.txt`, `agents.json` and `debug.log`; all three hold local paths, so none is published). The child's `nonce.num` and `r2.txt` land in the opened folder; delete them after the check (step 11).
 
 ## 8. Impact, workarounds, suggested fixes
 
@@ -226,7 +298,7 @@ Consequences seen:
 Workarounds and their costs:
 
 - Start a fresh subagent for each round instead of resuming. Costs the child's context (everything is re-sent) and an extra start-up per round.
-- Wait inside a tool call so the resumer never ends its turn while the child runs. Recorded on 2.1.307 only (appendix), not tested here. It is polling or sleeping, which many designs forbid.
+- Wait inside a tool call so the resumer never ends its turn while the child runs. Recorded on 2.1.307 only (appendix), not tested here; a standalone `sleep 300` was refused by Claude Code on 2.1.330 (L1). It is polling or sleeping, which many designs forbid.
 - Accept two completions and make the parent ignore the first one when it says "waiting". Every parent has to know the convention, and in these runs the reply went to the root, so the resumer still cannot act on it.
 
 Related upstream reports (read on 2026-11-24, state as then; none is a match for the trigger here):
@@ -262,9 +334,11 @@ Suggested fixes, any one of these, with the last as a rule that holds in all cas
 
 ### Earlier releases (history, not re-run)
 
-- 2.1.330, this repository: 4 of 4 valid stream-json runs (W1, W2, W3, L1) gave outcome O1 (resumer completion about 13.2 to 13.4 s with "waiting for the child", the child's own completion at the root 15.4 to 16.6 s, no re-wake). All four inherited the outer session's environment; the 2.1.331 runs above removed it and gave the same result. These are different releases, so this is not a controlled comparison. These run directories are not in the 2.1.331 table and have no `score.txt` (it is a hand redirect, section 3).
+- 2.1.330, this repository: 4 of 4 valid stream-json runs (W1, W2, W3, L1; in L1 the child's `sleep 300` was refused, so L1 had no long wait and behaved like W) gave outcome O1 (resumer completion about 13.2 to 13.4 s with "waiting for the child", the child's own completion at the root 15.4 to 16.6 s, no re-wake). All four inherited the outer session's environment; the 2.1.331 runs above removed it and gave the same result. These are different releases, so this is not a controlled comparison. These run directories are not in the 2.1.331 table and have no `score.txt` (it is a hand redirect, section 3).
 - 2.1.330, an earlier record made under the reporter's regular configuration (user settings and hooks loaded, permission mode auto, role-named agents): 8 runs in which the hand-back prompt fired once right after the resumer's plain-text wait, the resumer was re-woken, and a second completion carried the child's reply, 6.3 to 9.9 s after the child's second hand-back (outcome O2). The difference from the O1 results is not resolved.
-- 2.1.307: in stream-json the reply was lost in 11 of 11 runs; in the interactive CLI the prompt never fired in an agent with a resumed child outstanding in 15 resumer runs, and waiting inside a tool call was the only way to stay alive.
+- 2.1.307, stream-json: the reply was lost in 11 of 11 runs. The resumer's tool-free wait drew one "Your report has not been delivered. Call SubagentHandback..." injection and the resumer complied; the resumed child's second hand-back never entered the resumer's context (in 8 runs it reached no model, in 3 it reached the main session).
+- 2.1.307, interactive CLI (15 resumer runs): the hand-back prompt never fired in an agent with a resumed child outstanding; the resumer ended its turn tool-free and the child's hand-back woke it for a new turn that handed back both replies.
+- The earlier record also states that waiting inside a tool call (such as `sleep`) was the only way to stay alive on 2.1.307, without naming the surface.
 - The interactive CLI on 2.1.330 (two tmux runs, validity not established): the root's screen showed the child's reply as a hand-back message from the resumer's `SubagentHandback` call (the first run's banner showed permission mode auto). These runs are not results.
 
 ### How to read `score.py` output

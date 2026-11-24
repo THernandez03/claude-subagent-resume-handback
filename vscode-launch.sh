@@ -22,6 +22,12 @@
 #
 # Assumption: each value flag the launcher strips (such as --allowedTools) takes one value, as "--flag value" or "--flag=value".
 #
+# In the injection case the script writes runs/vscode-*/launch.txt,
+# agents.json and debug.log. launch.txt holds the binary path and the
+# extension's full arguments, which can include local paths, session ids (for
+# example --resume=<id>) and configuration JSON (--mcp-config), so it stays
+# local and is never published or pasted.
+#
 # The extension reads the binary's stdout, so this script writes nothing to
 # stdout. Diagnostics go to stderr.
 
@@ -82,6 +88,12 @@ fi
 # Injection.
 mkdir -p "$REPRO_DIR/runs"
 run_dir="$(mktemp -d "$REPRO_DIR/runs/vscode-XXXXXX")"
+
+{
+  printf 'binary: %s\n' "$binary"
+  printf 'version: %s\n' "$("$binary" --version </dev/null 2>/dev/null || true)"
+  printf 'arg: %s\n' "$@"
+} >"$run_dir/launch.txt"
 
 python3 -I "$REPRO_DIR/driver.py" --variant W --run-dir "$PWD" --render-only >"$run_dir/agents.json"
 allowed="$(python3 -I "$REPRO_DIR/driver.py" --print-allowed)"
